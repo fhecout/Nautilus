@@ -1,0 +1,19 @@
+{
+  "name": "nautilus",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "ollama": "^0.6.3",
+    "pdf-parse": "^2.4.5"
+  }
+}
