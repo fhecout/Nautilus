@@ -1,43 +1,5 @@
-# Dependencies
-node_modules/
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# Environment and secrets
+.secrets/
 .env
-.env.*
-!.env.example
-
-# Runtime / local data
-*.pid
-*.seed
-*.pid.lock
-
-# Test / coverage
-coverage/
-.nyc_output/
-
-# Build output (if added later)
-dist/
-build/
-*.tsbuildinfo
-
-# OS
-.DS_Store
-Thumbs.db
-Desktop.ini
-
-# Editor
-.idea/
-*.swp
-*.swo
-*~
-
-# Optional: uncomment if you do not want lockfiles in the repo
-# package-lock.json
+config/gmail-oauth-credentials.json
+logs/
+node_modules/

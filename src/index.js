@@ -1,5 +1,6 @@
 import readline from 'readline';
 import { Agent } from './core/Agent.js';
+import { loadEnvFile } from './core/env.js';
 import {
   clearScraperLogs,
   formatScraperLogDetail,
@@ -8,27 +9,55 @@ import {
   readScraperLogs
 } from './core/ScraperLogs.js';
 
-const MODEL = 'llama3.2:3b';
+loadEnvFile();
+
+const MODEL = process.env.OLLAMA_MODEL || 'qwen3.5:9b';
+const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+
+const agent = new Agent(MODEL, { ollamaHost: OLLAMA_HOST });
+
+console.log('\nAgente Inicializado: Nautilus');
+console.log(`Modelo Ollama: ${MODEL}`);
+console.log(`Servidor Ollama: ${agent.ollamaHost}`);
+console.log("(Digite 'sair' ou 'exit' para encerrar)");
+console.log('Comandos: logs | log <id> | logs limpar\n');
+
+try {
+  const status = await agent.checkOllamaConnection();
+  if (!status.hasModel) {
+    console.log(`Aviso: modelo "${MODEL}" nao encontrado no Ollama.`);
+    console.log(`Instale com: ollama pull ${MODEL}\n`);
+  }
+} catch (error) {
+  console.log(agent.formatOllamaError(error));
+  console.log();
+}
 
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
 });
 
-const agent = new Agent(MODEL);
-
-console.log('\nAgente Inicializado: Nautilus');
-console.log(`Modelo Ollama: ${MODEL}`);
-console.log("(Digite 'sair' ou 'exit' para encerrar)");
-console.log('Comandos: logs | log <id> | logs limpar\n');
+let isClosing = false;
+rl.on('close', () => {
+  isClosing = true;
+});
 
 const askQuestion = () => {
+  if (isClosing) return;
+
   rl.question('\nVoce: ', async userInput => {
     const normalizedInput = userInput.trim().toLowerCase();
+
+    if (!normalizedInput) {
+      askQuestion();
+      return;
+    }
 
     if (normalizedInput === 'sair' || normalizedInput === 'exit') {
       console.log('Encerrando...');
       rl.close();
+      process.exit(0);
       return;
     }
 

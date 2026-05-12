@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "gmail:auth": "node scripts/gmailAuth.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -13,7 +14,9 @@
   "description": "",
   "dependencies": {
     "cheerio": "^1.2.0",
+    "googleapis": "^171.4.0",
     "ollama": "^0.6.3",
-    "pdf-parse": "^2.4.5"
+    "pdf-parse": "^2.4.5",
+    "pdfkit": "^0.18.0"
   }
 }
