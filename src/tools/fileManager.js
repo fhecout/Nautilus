@@ -8,6 +8,7 @@ import {
   pathExists,
   resolveLocalPath
 } from './localPaths.js';
+import { isBulkMoveDangerous, requireConfirmation } from '../core/safe_mode.js';
 
 const MAX_READ_CHARS = 80000;
 const MAX_LIST_ITEMS = 200;
@@ -23,12 +24,21 @@ export const definition = {
       properties: {
         operation: {
           type: 'string',
-          enum: ['info', 'list', 'read', 'write', 'append', 'replace', 'mkdir', 'create_pdf'],
+          enum: ['info', 'list', 'read', 'write', 'append', 'replace', 'mkdir', 'create_pdf', 'delete', 'move'],
           description: 'Operacao desejada.'
         },
         path: {
           type: 'string',
           description: 'Caminho do arquivo ou pasta. Pode ser absoluto ou relativo ao projeto.'
+        },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Lista de caminhos para mover em lote.'
+        },
+        destinationPath: {
+          type: 'string',
+          description: 'Destino para a operacao move.'
         },
         content: {
           type: 'string',
@@ -45,9 +55,13 @@ export const definition = {
         overwrite: {
           type: 'boolean',
           description: 'Permite sobrescrever arquivo existente em write/create_pdf. Padrao: false.'
+        },
+        recursive: {
+          type: 'boolean',
+          description: 'Permite apagar pasta recursivamente na operacao delete.'
         }
       },
-      required: ['operation', 'path']
+      required: ['operation']
     }
   }
 };
@@ -55,7 +69,7 @@ export const definition = {
 export async function execute(args) {
   const input = normalizeArgs(args);
   const operation = String(input.operation || '').trim();
-  const targetPath = resolveLocalPath(input.path);
+  const targetPath = operation === 'move' && Array.isArray(input.paths) ? null : resolveLocalPath(input.path);
 
   switch (operation) {
     case 'info':
@@ -65,7 +79,7 @@ export async function execute(args) {
     case 'read':
       return await readFile(targetPath);
     case 'write':
-      return await writeTextFile(targetPath, input.content, Boolean(input.overwrite));
+      return await writeTextFile(targetPath, input.content, Boolean(input.overwrite), input);
     case 'append':
       return await appendTextFile(targetPath, input.content);
     case 'replace':
@@ -74,7 +88,11 @@ export async function execute(args) {
       await fs.mkdir(targetPath, { recursive: true });
       return direct(`Pasta criada/confirmada: ${targetPath}`);
     case 'create_pdf':
-      return await createPdf(targetPath, input.content, Boolean(input.overwrite));
+      return await createPdf(targetPath, input.content, Boolean(input.overwrite), input);
+    case 'delete':
+      return await deletePath(targetPath, Boolean(input.recursive), input);
+    case 'move':
+      return await movePaths(input);
     default:
       throw new Error(`Operacao de arquivo invalida: ${operation}`);
   }
@@ -129,9 +147,23 @@ async function readFile(filePath) {
   };
 }
 
-async function writeTextFile(filePath, content, overwrite) {
-  if ((await pathExists(filePath)) && !overwrite) {
+async function writeTextFile(filePath, content, overwrite, input) {
+  const exists = await pathExists(filePath);
+  if (exists && !overwrite) {
     throw new Error(`Arquivo ja existe. Use overwrite=true para sobrescrever: ${filePath}`);
+  }
+
+  if (exists) {
+    const confirmation = requireConfirmation(
+      {
+        summary: `sobrescrever o arquivo ${filePath}`,
+        targets: [filePath],
+        risk: 'o conteudo atual sera perdido.',
+        confirmationPhrase: 'SIM, SOBRESCREVER'
+      },
+      input
+    );
+    if (confirmation) return confirmation;
   }
 
   await ensureParentDir(filePath);
@@ -159,10 +191,24 @@ async function replaceInFile(filePath, search, replacement) {
   return direct(`Arquivo editado: ${filePath}\nSubstituicoes feitas: ${occurrences}`);
 }
 
-async function createPdf(filePath, content, overwrite) {
+async function createPdf(filePath, content, overwrite, input) {
   const pdfPath = path.extname(filePath).toLowerCase() === '.pdf' ? filePath : `${filePath}.pdf`;
-  if ((await pathExists(pdfPath)) && !overwrite) {
+  const exists = await pathExists(pdfPath);
+  if (exists && !overwrite) {
     throw new Error(`PDF ja existe. Use overwrite=true para sobrescrever: ${pdfPath}`);
+  }
+
+  if (exists) {
+    const confirmation = requireConfirmation(
+      {
+        summary: `sobrescrever o PDF ${pdfPath}`,
+        targets: [pdfPath],
+        risk: 'o PDF atual sera perdido.',
+        confirmationPhrase: 'SIM, SOBRESCREVER'
+      },
+      input
+    );
+    if (confirmation) return confirmation;
   }
 
   await ensureParentDir(pdfPath);
@@ -189,6 +235,67 @@ async function createPdf(filePath, content, overwrite) {
   });
 
   return direct(`PDF criado: ${pdfPath}`);
+}
+
+async function deletePath(targetPath, recursive, input) {
+  const info = await getFileInfo(targetPath);
+  const confirmation = requireConfirmation(
+    {
+      summary: `${info.isDirectory ? 'apagar a pasta' : 'apagar o arquivo'} ${targetPath}`,
+      targets: [targetPath],
+      risk: 'a exclusao remove dados do disco e pode nao ser recuperavel.',
+      confirmationPhrase: 'SIM, APAGAR'
+    },
+    input
+  );
+  if (confirmation) return confirmation;
+
+  await fs.rm(targetPath, { recursive: Boolean(recursive), force: false });
+  return direct(`${info.isDirectory ? 'Pasta apagada' : 'Arquivo apagado'}: ${targetPath}`);
+}
+
+async function movePaths(input) {
+  const sources = Array.isArray(input.paths) && input.paths.length > 0
+    ? input.paths.map(item => resolveLocalPath(item))
+    : [resolveLocalPath(input.path)];
+  const destination = resolveLocalPath(input.destinationPath);
+
+  if (isBulkMoveDangerous(sources.length)) {
+    const confirmation = requireConfirmation(
+      {
+        summary: `mover ${sources.length} arquivos/pastas para ${destination}`,
+        targets: sources,
+        risk: 'muitos arquivos podem sair do lugar atual e fluxos existentes podem quebrar.',
+        confirmationPhrase: 'SIM, MOVER'
+      },
+      input
+    );
+    if (confirmation) return confirmation;
+  }
+
+  await fs.mkdir(destination, { recursive: true });
+  const moved = [];
+
+  for (const source of sources) {
+    const target = path.join(destination, path.basename(source));
+    if (await pathExists(target)) {
+      const confirmation = requireConfirmation(
+        {
+          summary: `sobrescrever destino durante move: ${target}`,
+          targets: [source, target],
+          risk: 'o item existente no destino pode ser perdido.',
+          confirmationPhrase: 'SIM, SOBRESCREVER'
+        },
+        input
+      );
+      if (confirmation) return confirmation;
+    }
+
+    await fs.rename(source, target);
+    moved.push(`${source} -> ${target}`);
+  }
+
+  return direct(`Itens movidos:\n${moved.join('\n')}`);
 }
 
 function direct(finalAnswer) {
@@ -221,4 +328,3 @@ function normalizeArgs(args) {
 
   return args && typeof args === 'object' ? args : {};
 }
-

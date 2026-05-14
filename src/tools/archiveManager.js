@@ -2,6 +2,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ensureParentDir, pathExists, resolveLocalPath } from './localPaths.js';
+import { requireConfirmation } from '../core/safe_mode.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -66,8 +67,22 @@ async function zipFiles(input) {
   if (sources.length === 0) throw new Error('Informe inputPaths para compactar.');
 
   const output = resolveLocalPath(input.outputPath);
-  if ((await pathExists(output)) && !input.overwrite) {
+  const outputExists = await pathExists(output);
+  if (outputExists && !input.overwrite) {
     throw new Error(`Arquivo ZIP ja existe. Use overwrite=true para sobrescrever: ${output}`);
+  }
+
+  if (outputExists) {
+    const confirmation = requireConfirmation(
+      {
+        summary: `sobrescrever o arquivo ZIP ${output}`,
+        targets: [output],
+        risk: 'o ZIP atual sera substituido.',
+        confirmationPhrase: 'SIM, SOBRESCREVER'
+      },
+      input
+    );
+    if (confirmation) return confirmation;
   }
 
   await ensureParentDir(output);
@@ -94,6 +109,19 @@ async function unzipFile(input) {
   const outputExists = await pathExists(output);
   if (outputExists && !input.overwrite) {
     throw new Error(`Destino ja existe. Use overwrite=true para extrair mesmo assim: ${output}`);
+  }
+
+  if (outputExists) {
+    const confirmation = requireConfirmation(
+      {
+        summary: `extrair ZIP sobre destino existente ${output}`,
+        targets: [source, output],
+        risk: 'arquivos existentes na pasta de destino podem ser substituidos.',
+        confirmationPhrase: 'SIM, SOBRESCREVER'
+      },
+      input
+    );
+    if (confirmation) return confirmation;
   }
 
   const command = [
@@ -126,4 +154,3 @@ function normalizeArgs(args) {
 
   return args && typeof args === 'object' ? args : {};
 }
-

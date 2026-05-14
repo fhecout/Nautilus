@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ensureParentDir, pathExists, resolveLocalPath } from './localPaths.js';
+import { requireConfirmation } from '../core/safe_mode.js';
 
 const execFileAsync = promisify(execFile);
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.heic']);
@@ -49,8 +50,22 @@ export async function execute(args) {
     ? resolveLocalPath(input.outputPath)
     : source.replace(/\.[^.\\/:]+$/, '') + `.${outputFormat}`;
 
-  if ((await pathExists(target)) && !input.overwrite) {
+  const targetExists = await pathExists(target);
+  if (targetExists && !input.overwrite) {
     throw new Error(`Arquivo de destino ja existe. Use overwrite=true para sobrescrever: ${target}`);
+  }
+
+  if (targetExists) {
+    const confirmation = requireConfirmation(
+      {
+        summary: `sobrescrever o arquivo convertido ${target}`,
+        targets: [target],
+        risk: 'o arquivo de destino atual sera perdido.',
+        confirmationPhrase: 'SIM, SOBRESCREVER'
+      },
+      input
+    );
+    if (confirmation) return confirmation;
   }
 
   await ensureParentDir(target);
@@ -129,4 +144,3 @@ function normalizeArgs(args) {
 
   return args && typeof args === 'object' ? args : {};
 }
-

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ensureParentDir, resolveLocalPath } from './localPaths.js';
+import { analyzeSqlSafety, requireConfirmation } from '../core/safe_mode.js';
 
 const MAX_ROWS = 100;
 const execFileAsync = promisify(execFile);
@@ -55,6 +56,22 @@ export async function execute(args) {
 
   const sql = operation === 'query' || operation === 'exec' ? requireSql(input.sql) : '';
   if (operation === 'query') assertReadOnly(sql);
+
+  if (operation === 'exec') {
+    const analysis = analyzeSqlSafety(sql);
+    if (analysis.dangerous) {
+      const confirmation = requireConfirmation(
+        {
+          summary: `executar SQL destrutivo em ${dbPath}`,
+          targets: analysis.findings.map(finding => `${finding.type}: ${finding.statement}`),
+          risk: 'o comando pode apagar dados, alterar estrutura do banco ou modificar muitas linhas.',
+          confirmationPhrase: 'SIM, EXECUTAR SQL'
+        },
+        input
+      );
+      if (confirmation) return confirmation;
+    }
+  }
 
   const limit = clampInteger(input.maxRows ?? 50, 1, MAX_ROWS);
   const result = await runPythonSqlite({

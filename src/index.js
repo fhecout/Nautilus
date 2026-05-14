@@ -1,6 +1,7 @@
 import readline from 'readline';
 import { Agent } from './core/Agent.js';
 import { loadEnvFile } from './core/env.js';
+import { speakText } from './core/speaker.js';
 import {
   clearScraperLogs,
   formatScraperLogDetail,
@@ -13,6 +14,7 @@ loadEnvFile();
 
 const MODEL = process.env.OLLAMA_MODEL || 'qwen3.5:9b';
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+// const VOICE_ENABLED = true; // Comente esta linha para o Nautilus parar de responder em voz.
 
 const agent = new Agent(MODEL, { ollamaHost: OLLAMA_HOST });
 
@@ -68,11 +70,14 @@ const askQuestion = () => {
 
     process.stdout.write('\nAgente: ');
 
+    let agentOutput = '';
     await agent.chat(userInput, text => {
+      agentOutput += text;
       process.stdout.write(text);
     });
 
     console.log();
+    if (typeof VOICE_ENABLED !== 'undefined' && VOICE_ENABLED) await speakText(agentOutput);
     askQuestion();
   });
 };
