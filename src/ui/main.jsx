@@ -242,7 +242,6 @@ function SystemMetrics({ system }) {
   const cpuLoad = system?.cpu?.loadPercent ?? 0;
   const memoryLoad = system?.memory?.usedPercent ?? 0;
   const primaryDisk = system?.storage?.[0];
-  const gpu = system?.graphics?.[0];
 
   return (
     <div className="metric-block">
@@ -273,11 +272,6 @@ function SystemMetrics({ system }) {
           value={`${disk.usedPercent}% de ${formatBytes(disk.sizeBytes)}`}
         />
       ))}
-      <MetricLine
-        icon={Database}
-        label="GPU"
-        value={gpu?.model ? `${gpu.model}${gpu.temperatureC ? ` / ${gpu.temperatureC}C` : ''}` : 'nao detectada'}
-      />
     </div>
   );
 }
