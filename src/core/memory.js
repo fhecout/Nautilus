@@ -1,29 +1,104 @@
 import { randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import path from 'node:path';
+import fs from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { Ollama } from 'ollama';
 
-const execFileAsync = promisify(execFile);
 const DEFAULT_MEMORY_DB_PATH = path.resolve(process.cwd(), 'data', 'memory.sqlite');
+const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+const EMBEDDING_MODEL = 'nomic-embed-text';
+
+const ollama = new Ollama({ host: OLLAMA_HOST });
+let dbInstance = null;
 
 export function getMemoryDbPath() {
   return process.env.MEMORY_DB_PATH || DEFAULT_MEMORY_DB_PATH;
 }
 
-export async function saveMemory(text, options = {}) {
-  const memory = {
-    id: options.id || randomUUID(),
-    text: normalizeText(text),
-    tags: normalizeTags(options.tags || extractTags(text)),
-    created_at: options.created_at || new Date().toISOString()
-  };
+function getDb() {
+  if (dbInstance) return dbInstance;
+  const dbPath = getMemoryDbPath();
+  const dir = path.dirname(dbPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
 
-  if (!memory.text) {
+  dbInstance = new DatabaseSync(dbPath);
+
+  // Inicializa a tabela principal
+  dbInstance.exec(`
+    CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      tags TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+
+  // Verifica se a coluna de embedding existe, adiciona se faltar (migração simples)
+  const pragma = dbInstance.prepare("PRAGMA table_info(memories)").all();
+  const hasEmbedding = pragma.some(col => col.name === 'embedding');
+  if (!hasEmbedding) {
+    dbInstance.exec("ALTER TABLE memories ADD COLUMN embedding TEXT");
+  }
+
+  return dbInstance;
+}
+
+async function getEmbedding(text) {
+  try {
+    const response = await ollama.embeddings({
+      model: EMBEDDING_MODEL,
+      prompt: text
+    });
+    return response.embedding;
+  } catch (error) {
+    console.error(`[Memory Embeddings] Erro ao obter embedding com Ollama: ${error.message}`);
+    return null;
+  }
+}
+
+function cosineSimilarity(vecA, vecB) {
+  if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+  let dotProduct = 0.0;
+  let normA = 0.0;
+  let normB = 0.0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+export async function saveMemory(text, options = {}) {
+  const db = getDb();
+  const id = options.id || randomUUID();
+  const normalizedText = normalizeText(text);
+  const tags = normalizeTags(options.tags || extractTags(text));
+  const created_at = options.created_at || new Date().toISOString();
+
+  if (!normalizedText) {
     throw new Error('Texto da memoria nao informado.');
   }
 
-  await runMemorySqlite('save', { memory });
-  return memory;
+  const embeddingVector = await getEmbedding(normalizedText);
+  const embeddingJson = embeddingVector ? JSON.stringify(embeddingVector) : null;
+
+  const stmt = db.prepare(`
+    INSERT OR REPLACE INTO memories (id, text, tags, embedding, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  stmt.run(id, normalizedText, JSON.stringify(tags), embeddingJson, created_at);
+
+  return {
+    id,
+    text: normalizedText,
+    tags,
+    embedding: embeddingVector,
+    created_at
+  };
 }
 
 export async function searchMemories(keyword, options = {}) {
@@ -31,14 +106,42 @@ export async function searchMemories(keyword, options = {}) {
   if (!query) return [];
 
   const limit = clampInteger(options.limit ?? 8, 1, 50);
-  const result = await runMemorySqlite('search', { query, limit });
-  return result.memories || [];
+  const db = getDb();
+  const like = `%${query.toLowerCase()}%`;
+
+  const stmt = db.prepare(`
+    SELECT id, text, tags, created_at FROM memories
+    WHERE lower(text) LIKE ? OR lower(tags) LIKE ?
+    ORDER BY created_at DESC
+    LIMIT ?
+  `);
+
+  const rows = stmt.all(like, like, limit);
+  return rows.map(row => ({
+    id: row.id,
+    text: row.text,
+    tags: JSON.parse(row.tags || '[]'),
+    created_at: row.created_at
+  }));
 }
 
 export async function listMemories(options = {}) {
   const limit = clampInteger(options.limit ?? 30, 1, 100);
-  const result = await runMemorySqlite('list', { limit });
-  return result.memories || [];
+  const db = getDb();
+
+  const stmt = db.prepare(`
+    SELECT id, text, tags, created_at FROM memories
+    ORDER BY created_at DESC
+    LIMIT ?
+  `);
+
+  const rows = stmt.all(limit);
+  return rows.map(row => ({
+    id: row.id,
+    text: row.text,
+    tags: JSON.parse(row.tags || '[]'),
+    created_at: row.created_at
+  }));
 }
 
 export async function deleteMemory(identifier) {
@@ -47,17 +150,68 @@ export async function deleteMemory(identifier) {
     throw new Error('Informe o id ou texto da memoria a apagar.');
   }
 
-  const result = await runMemorySqlite('delete', { identifier: value });
-  return result.deleted || [];
+  const db = getDb();
+  const lowerVal = `%${value.toLowerCase()}%`;
+
+  const selectStmt = db.prepare(`
+    SELECT id, text, tags, created_at FROM memories
+    WHERE id = ? OR lower(text) LIKE ? OR lower(tags) LIKE ?
+  `);
+  const rows = selectStmt.all(value, lowerVal, lowerVal);
+  const deleted = rows.map(row => ({
+    id: row.id,
+    text: row.text,
+    tags: JSON.parse(row.tags || '[]'),
+    created_at: row.created_at
+  }));
+
+  const deleteStmt = db.prepare("DELETE FROM memories WHERE id = ?");
+  for (const row of deleted) {
+    deleteStmt.run(row.id);
+  }
+
+  return deleted;
 }
 
 export async function findRelevantMemories(userInput, options = {}) {
+  const limit = options.limit ?? 6;
+  const db = getDb();
+
+  // 1. Tenta buscar similaridade semântica por embeddings
+  const queryVector = await getEmbedding(userInput);
+  if (queryVector) {
+    const stmt = db.prepare("SELECT id, text, tags, embedding, created_at FROM memories WHERE embedding IS NOT NULL");
+    const rows = stmt.all();
+
+    const scored = rows.map(row => {
+      const tags = JSON.parse(row.tags || '[]');
+      const embedding = JSON.parse(row.embedding);
+      const similarity = cosineSimilarity(queryVector, embedding);
+      return {
+        id: row.id,
+        text: row.text,
+        tags,
+        created_at: row.created_at,
+        similarity
+      };
+    });
+
+    // Ordena por maior similaridade e filtra por limiar aceitável (ex: 0.35)
+    scored.sort((a, b) => b.similarity - a.similarity);
+    const semanticResults = scored.filter(item => item.similarity >= 0.35).slice(0, limit);
+
+    if (semanticResults.length > 0) {
+      return semanticResults;
+    }
+  }
+
+  // 2. Fallback de busca tradicional por palavra-chave se embeddings falharem ou não houver correspondência semântica
   const keywords = extractSearchTerms(userInput).slice(0, 5);
   const seen = new Set();
   const memories = [];
 
   for (const keyword of keywords) {
-    const found = await searchMemories(keyword, { limit: options.limit ?? 5 });
+    const found = await searchMemories(keyword, { limit: 5 });
     for (const memory of found) {
       if (!seen.has(memory.id)) {
         seen.add(memory.id);
@@ -66,7 +220,7 @@ export async function findRelevantMemories(userInput, options = {}) {
     }
   }
 
-  return memories.slice(0, options.limit ?? 6);
+  return memories.slice(0, limit);
 }
 
 export function extractMemoryText(userInput) {
@@ -115,89 +269,6 @@ export function formatMemories(memories) {
       return `- ${memory.id}: ${memory.text}${tags}`;
     })
     .join('\n');
-}
-
-async function runMemorySqlite(operation, payload) {
-  const script = `
-import json
-import os
-import sqlite3
-import sys
-
-db_path = sys.argv[1]
-operation = sys.argv[2]
-payload = json.loads(sys.argv[3])
-os.makedirs(os.path.dirname(db_path), exist_ok=True)
-conn = sqlite3.connect(db_path)
-conn.row_factory = sqlite3.Row
-try:
-    conn.execute("""
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        text TEXT NOT NULL,
-        tags TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      )
-    """)
-
-    def row_to_memory(row):
-        return {
-            "id": row["id"],
-            "text": row["text"],
-            "tags": json.loads(row["tags"] or "[]"),
-            "created_at": row["created_at"]
-        }
-
-    if operation == "save":
-        memory = payload["memory"]
-        conn.execute(
-            "INSERT OR REPLACE INTO memories (id, text, tags, created_at) VALUES (?, ?, ?, ?)",
-            (memory["id"], memory["text"], json.dumps(memory["tags"], ensure_ascii=False), memory["created_at"])
-        )
-        conn.commit()
-        print(json.dumps({"memory": memory}, ensure_ascii=False))
-    elif operation == "search":
-        query = payload["query"].lower()
-        like = "%" + query + "%"
-        rows = conn.execute(
-            "SELECT id, text, tags, created_at FROM memories WHERE lower(text) LIKE ? OR lower(tags) LIKE ? ORDER BY created_at DESC LIMIT ?",
-            (like, like, int(payload["limit"]))
-        ).fetchall()
-        print(json.dumps({"memories": [row_to_memory(row) for row in rows]}, ensure_ascii=False))
-    elif operation == "list":
-        rows = conn.execute(
-            "SELECT id, text, tags, created_at FROM memories ORDER BY created_at DESC LIMIT ?",
-            (int(payload["limit"]),)
-        ).fetchall()
-        print(json.dumps({"memories": [row_to_memory(row) for row in rows]}, ensure_ascii=False))
-    elif operation == "delete":
-        identifier = payload["identifier"].lower()
-        rows = conn.execute(
-            "SELECT id, text, tags, created_at FROM memories WHERE id = ? OR lower(text) LIKE ? OR lower(tags) LIKE ?",
-            (payload["identifier"], "%" + identifier + "%", "%" + identifier + "%")
-        ).fetchall()
-        deleted = [row_to_memory(row) for row in rows]
-        for row in rows:
-            conn.execute("DELETE FROM memories WHERE id = ?", (row["id"],))
-        conn.commit()
-        print(json.dumps({"deleted": deleted}, ensure_ascii=False))
-    else:
-        raise ValueError("operacao invalida")
-finally:
-    conn.close()
-`;
-
-  const { stdout } = await execFileAsync(
-    'python',
-    ['-c', script, getMemoryDbPath(), operation, JSON.stringify(payload)],
-    {
-      windowsHide: true,
-      timeout: 60000,
-      maxBuffer: 1024 * 1024 * 5
-    }
-  );
-
-  return JSON.parse(stdout);
 }
 
 function extractTags(text) {

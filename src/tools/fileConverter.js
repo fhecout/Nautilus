@@ -1,12 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { ensureParentDir, pathExists, resolveLocalPath } from './localPaths.js';
 import { requireConfirmation } from '../core/safe_mode.js';
 
-const execFileAsync = promisify(execFile);
-const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.heic']);
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff']);
 const TEXT_EXTENSIONS = new Set(['.txt', '.md', '.csv', '.json', '.log']);
 
 export const definition = {
@@ -14,7 +11,7 @@ export const definition = {
   function: {
     name: 'convert_file',
     description:
-      'Converte arquivos locais entre formatos comuns. Usa ImageMagick para imagens/PDF: JPG/JPEG/PNG/WEBP/GIF/BMP/TIFF/PDF. Tambem converte PDF para TXT e texto para PDF simples.',
+      'Converte arquivos locais entre formatos comuns. Suporta imagens (JPG/JPEG/PNG/WEBP/GIF/BMP/TIFF), conversao de texto simples para PDF, imagens para PDF e PDF para TXT.',
     parameters: {
       type: 'object',
       properties: {
@@ -77,8 +74,10 @@ export async function execute(args) {
     await convertPdfToText(source, target);
   } else if (TEXT_EXTENSIONS.has(sourceExt) && targetExt === '.pdf') {
     await convertTextToPdf(source, target);
-  } else if (IMAGE_EXTENSIONS.has(sourceExt) || IMAGE_EXTENSIONS.has(targetExt) || sourceExt === '.pdf' || targetExt === '.pdf') {
-    await convertWithImageMagick(source, target);
+  } else if (IMAGE_EXTENSIONS.has(sourceExt) && targetExt === '.pdf') {
+    await convertImageToPdf(source, target);
+  } else if (IMAGE_EXTENSIONS.has(sourceExt) && IMAGE_EXTENSIONS.has(targetExt)) {
+    await convertImageWithSharp(source, target);
   } else if (TEXT_EXTENSIONS.has(sourceExt) && TEXT_EXTENSIONS.has(targetExt)) {
     await fs.copyFile(source, target);
   } else {
@@ -91,10 +90,36 @@ export async function execute(args) {
   };
 }
 
-async function convertWithImageMagick(source, target) {
-  await execFileAsync('magick', [source, target], {
-    windowsHide: true,
-    timeout: 120000
+async function convertImageWithSharp(source, target) {
+  const sharp = (await import('sharp')).default;
+  await sharp(source).toFile(target);
+}
+
+async function convertImageToPdf(source, target) {
+  const PDFDocument = (await import('pdfkit')).default;
+
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ autoFirstPage: false });
+      const chunks = [];
+      doc.on('data', chunk => chunks.push(chunk));
+      doc.on('error', reject);
+      doc.on('end', async () => {
+        try {
+          await fs.writeFile(target, Buffer.concat(chunks));
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+      const img = doc.openImage(source);
+      doc.addPage({ size: [img.width, img.height] });
+      doc.image(img, 0, 0);
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 

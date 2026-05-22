@@ -1,4 +1,5 @@
 import * as systemTime from './systemTime.js';
+import * as systemMonitor from './systemMonitor.js';
 import * as webScraper from './webScraper.js';
 import * as googleSearch from './googleSearch.js';
 import * as pdfReader from './pdfReader.js';
@@ -13,6 +14,7 @@ import * as memoryManager from './memoryManager.js';
 // Adicione novas tools neste array conforme o projeto cresce
 export const availableTools = [
   systemTime,
+  systemMonitor,
   webScraper,
   googleSearch,
   pdfReader,

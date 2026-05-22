@@ -14,7 +14,19 @@ const SKIP_DIRS = new Set([
   'Windows',
   'Program Files',
   'Program Files (x86)',
-  '$Recycle.Bin'
+  '$Recycle.Bin',
+  '.next',
+  '.nuxt',
+  '.turbo',
+  '.gradle',
+  'venv',
+  'env',
+  '.venv',
+  'dist',
+  'build',
+  'target',
+  'out',
+  '__pycache__'
 ]);
 const MAX_SCAN = 25000;
 const MAX_RESULTS = 50;
@@ -47,9 +59,13 @@ export const definition = {
           type: 'boolean',
           description: 'Quando true, procura tambem dentro de arquivos de texto.'
         },
+        maxDepth: {
+          type: 'integer',
+          description: 'Profundidade maxima de subdiretorios para buscar (ex: 1 para apenas o diretorio raiz, 3 para buscas medianas). Padrao: 3.'
+        },
         maxResults: {
           type: 'integer',
-          description: 'Maximo de resultados. Padrao 20, limite 50.'
+          description: 'Maximo de resultados. Padrao: 20, limite 50.'
         }
       },
       required: ['query']
@@ -65,12 +81,13 @@ export async function execute(args) {
   const roots = input.root ? [resolveLocalPath(input.root)] : DEFAULT_ROOTS;
   const extensions = normalizeExtensions(input.extensions);
   const includeContent = Boolean(input.includeContent);
+  const maxDepth = clampInteger(input.maxDepth ?? 3, 1, 10);
   const maxResults = clampInteger(input.maxResults ?? 20, 1, MAX_RESULTS);
   const results = [];
   let scanned = 0;
 
   for (const root of roots) {
-    await walk(root);
+    await walk(root, 0);
     if (results.length >= maxResults || scanned >= MAX_SCAN) break;
   }
 
@@ -82,8 +99,9 @@ export async function execute(args) {
     scanned
   };
 
-  async function walk(currentPath) {
+  async function walk(currentPath, currentDepth) {
     if (results.length >= maxResults || scanned >= MAX_SCAN) return;
+    if (currentDepth > maxDepth) return;
 
     let entries;
     try {
@@ -103,7 +121,7 @@ export async function execute(args) {
         if (entry.name.toLowerCase().includes(query)) {
           results.push(await toResult(fullPath, 'nome da pasta'));
         }
-        await walk(fullPath);
+        await walk(fullPath, currentDepth + 1);
         continue;
       }
 

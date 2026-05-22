@@ -215,12 +215,73 @@ async function scrapePage(url, options) {
   };
 }
 
+async function scrapeWithElectron(url, timeoutMs = 15000) {
+  const { BrowserWindow } = await import('electron');
+  return new Promise((resolve, reject) => {
+    const win = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        images: false,
+        webSecurity: false,
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    });
+
+    const timeout = setTimeout(() => {
+      win.destroy();
+      reject(new Error(`Timeout ao renderizar pagina com Electron: ${url}`));
+    }, timeoutMs);
+
+    win.webContents.once('did-finish-load', async () => {
+      try {
+        const html = await win.webContents.executeJavaScript('document.documentElement.outerHTML');
+        clearTimeout(timeout);
+        win.destroy();
+        resolve(html);
+      } catch (err) {
+        clearTimeout(timeout);
+        win.destroy();
+        reject(err);
+      }
+    });
+
+    win.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
+      clearTimeout(timeout);
+      win.destroy();
+      reject(new Error(`Falha ao carregar pagina no Electron: ${errorDescription} (${errorCode})`));
+    });
+
+    win.loadURL(url).catch(err => {
+      clearTimeout(timeout);
+      win.destroy();
+      reject(err);
+    });
+  });
+}
+
 async function fetchHtml(url, { timeoutMs, maxBytes }) {
   let currentUrl = url;
   let redirects = 0;
 
   while (redirects <= 5) {
     await assertPublicHttpUrl(currentUrl);
+
+    if (process.versions.electron) {
+      try {
+        const html = await scrapeWithElectron(currentUrl, timeoutMs);
+        return {
+          finalUrl: currentUrl,
+          status: 200,
+          contentType: 'text/html',
+          bytesRead: Buffer.byteLength(html),
+          truncated: false,
+          body: html
+        };
+      } catch (error) {
+        console.warn(`[WebScraper] Falha ao raspar com Electron, usando fallback de fetch estatico: ${error.message}`);
+      }
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);

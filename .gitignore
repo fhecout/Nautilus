@@ -2,5 +2,6 @@
 .env
 config/gmail-oauth-credentials.json
 data/
+dist/
 logs/
 node_modules/

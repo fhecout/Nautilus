@@ -1,10 +1,8 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { DatabaseSync } from 'node:sqlite';
 import { ensureParentDir, resolveLocalPath } from './localPaths.js';
 import { analyzeSqlSafety, requireConfirmation } from '../core/safe_mode.js';
 
 const MAX_ROWS = 100;
-const execFileAsync = promisify(execFile);
 
 export const definition = {
   type: 'function',
@@ -74,7 +72,7 @@ export async function execute(args) {
   }
 
   const limit = clampInteger(input.maxRows ?? 50, 1, MAX_ROWS);
-  const result = await runPythonSqlite({
+  const result = runNativeSqlite({
     dbPath,
     operation,
     sql,
@@ -108,52 +106,34 @@ function normalizeParams(params) {
   return Array.isArray(params) ? params : [];
 }
 
-async function runPythonSqlite({ dbPath, operation, sql, params, limit }) {
-  const script = `
-import json
-import sqlite3
-import sys
-
-db_path = sys.argv[1]
-operation = sys.argv[2]
-sql = sys.argv[3]
-params = json.loads(sys.argv[4])
-limit = int(sys.argv[5])
-
-conn = sqlite3.connect(db_path)
-conn.row_factory = sqlite3.Row
-try:
-    cur = conn.cursor()
-    if operation == "tables":
-        cur.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name")
-        rows = [dict(row) for row in cur.fetchall()]
-    elif operation == "schema":
-        cur.execute("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name")
-        rows = [dict(row) for row in cur.fetchall()]
-    elif operation == "query":
-        cur.execute(sql, params)
-        rows = [dict(row) for row in cur.fetchmany(limit)]
-    elif operation == "exec":
-        if params:
-            cur.execute(sql, params)
-        else:
-            cur.executescript(sql)
-        conn.commit()
-        rows = []
-    else:
-        raise ValueError("operacao invalida")
-    print(json.dumps({"rows": rows}, ensure_ascii=False))
-finally:
-    conn.close()
-`;
-
-  const { stdout } = await execFileAsync('python', ['-c', script, dbPath, operation, sql, JSON.stringify(params), String(limit)], {
-    windowsHide: true,
-    timeout: 60000,
-    maxBuffer: 1024 * 1024 * 5
-  });
-
-  return JSON.parse(stdout);
+function runNativeSqlite({ dbPath, operation, sql, params, limit }) {
+  const db = new DatabaseSync(dbPath);
+  try {
+    let rows = [];
+    if (operation === 'tables') {
+      const stmt = db.prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name");
+      rows = stmt.all();
+    } else if (operation === 'schema') {
+      const stmt = db.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name");
+      rows = stmt.all();
+    } else if (operation === 'query') {
+      const stmt = db.prepare(sql);
+      rows = stmt.all(...params).slice(0, limit);
+    } else if (operation === 'exec') {
+      if (params && params.length > 0) {
+        const stmt = db.prepare(sql);
+        stmt.run(...params);
+      } else {
+        db.exec(sql);
+      }
+      rows = [];
+    } else {
+      throw new Error(`Operacao invalida: ${operation}`);
+    }
+    return { rows };
+  } finally {
+    db.close();
+  }
 }
 
 function formatRows(title, rows) {

@@ -36,6 +36,7 @@ export class Agent {
       'USO DE MEMORIA: use memorias relevantes para caminhos, preferencias, projetos, pessoas, empresas e decisoes recorrentes. Se o usuario disser "lembre que", "salve que" ou "guarde que", salve a memoria. Se pedir para listar, buscar ou apagar memorias, use manage_memory ou o fluxo direto de memoria.',
       'MUDANCA DE CONTEXTO: o assunto pode mudar a qualquer mensagem. Nao force contexto antigo. Use historico e memoria somente quando ajudarem o pedido atual.',
       'FERRAMENTAS: use ferramentas quando precisar de dados reais, arquivos locais, Gmail, PDFs, web, conversao, compactacao, SQLite, memoria ou hora atual. Nao use ferramenta para conversa casual ou resposta conceitual simples.',
+      'STATUS DO PC: use get_system_status quando o usuario perguntar sobre CPU, RAM, memoria, armazenamento, disco, temperatura, GPU, desempenho ou uso do computador.',
       'WEB E NOTICIAS: para pesquisa na internet, use search_google. Para abrir, ler, resumir ou aprofundar site, resultado ou noticia, use scrape_web_site. Em noticias, explique o que aconteceu, quem esta envolvido, por que importa e o que ainda e incerto.',
       'PDFS: use read_pdf para ler, procurar, resumir, traduzir ou responder perguntas sobre PDFs. Responda ao pedido, nao despeje texto bruto.',
       'GMAIL: use read_gmail para ler, verificar, resumir, procurar ou entender emails. Ao resumir emails, destaque remetente/empresa provavel, assunto, data, tipo do email, urgencia, sobre o que e e acao sugerida. Proteja dados privados e mostre so o necessario.',
@@ -294,63 +295,8 @@ export class Agent {
   }
 
   getToolsForInput(userInput, relevantMemories = []) {
-    const normalized = this.normalizeText(userInput);
-    const toolNames = [];
-
-    if (/\b(hora|horas|horario|que dia|qual dia|data atual|dia de hoje)\b/.test(normalized)) {
-      toolNames.push('get_system_time');
-    }
-
-    if (
-      /\b(pesquise|pesquisar|busque|buscar|procure|procurar|google|internet|web|noticia|noticias|ultimas|atualizado|preco atual|cotacao)\b/.test(
-        normalized
-      )
-    ) {
-      toolNames.push('search_google');
-    }
-
-    if (
-      /\b(arquivo|arquivos|pasta|pastas|txt|md|json|csv|crie|criar|edite|editar|altere|alterar|escreva|salve|listar|liste|leia|ler|apague|apagar|delete|remova|remover|mova|mover)\b/.test(
-        normalized
-      )
-    ) {
-      toolNames.push('manage_files');
-    }
-
-    if (
-      /\b(encontre|encontrar|localize|localizar|buscar arquivo|procurar arquivo|procure arquivo|meu pc|computador|downloads|documentos|desktop|imagens|navegar)\b/.test(
-        normalized
-      )
-    ) {
-      toolNames.push('find_local_files');
-    }
-
-    if (
-      /\b(converta|converter|transforme|transformar|formato|jpg|jpeg|png|webp|gif|bmp|tiff|pdf para|para pdf|para png|para jpg|para jpeg|para txt)\b/.test(
-        normalized
-      )
-    ) {
-      toolNames.push('convert_file');
-    }
-
-    if (/\b(compacte|compactar|zip|zipar|descompacte|descompactar|extrair|extraia)\b/.test(normalized)) {
-      toolNames.push('manage_archive');
-    }
-
-    if (/\b(sqlite|sql|banco de dados|database|tabela|consulta|select|insert|update|delete)\b/.test(normalized)) {
-      toolNames.push('manage_sqlite');
-    }
-
-    if (/\b(lembre|salve que|guarde que|memoria|memorias|memória|memórias|lembranca|lembranças)\b/.test(normalized)) {
-      toolNames.push('manage_memory');
-    }
-
-    if (relevantMemories.length > 0) {
-      toolNames.push('find_local_files', 'manage_files');
-    }
-
-    if (toolNames.length === 0) return [];
-    return getToolDefinitions([...new Set(toolNames)]);
+    // Retorna sempre todas as ferramentas para que o Ollama decida autonomamente qual usar
+    return getToolDefinitions();
   }
 
   async checkOllamaConnection() {

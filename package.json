@@ -2,9 +2,14 @@
   "name": "nautilus",
   "version": "1.0.0",
   "type": "module",
-  "main": "src/index.js",
+  "main": "electron/main.js",
   "scripts": {
     "start": "node src/index.js",
+    "server": "node src/server.js",
+    "ui": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "desktop": "npm run build && electron .",
+    "preview": "vite preview --host 127.0.0.1",
     "gmail:auth": "node scripts/gmailAuth.js",
     "test": "node --test"
   },
@@ -14,9 +19,21 @@
   "description": "",
   "dependencies": {
     "cheerio": "^1.2.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "googleapis": "^171.4.0",
+    "lucide-react": "^1.16.0",
     "ollama": "^0.6.3",
     "pdf-parse": "^2.4.5",
-    "pdfkit": "^0.18.0"
+    "pdfkit": "^0.18.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "sharp": "^0.34.5",
+    "systeminformation": "^5.31.6"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.2",
+    "electron": "^42.1.0",
+    "vite": "^8.0.13"
   }
 }
