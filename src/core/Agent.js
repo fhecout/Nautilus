@@ -58,7 +58,7 @@ export class Agent {
       'MUDANCA DE CONTEXTO: o assunto pode mudar a qualquer mensagem. Nao force contexto antigo. Use historico e memoria somente quando ajudarem o pedido atual.',
       'FERRAMENTAS: use ferramentas quando precisar de dados reais, arquivos locais, Gmail, PDFs, web, conversao, compactacao, SQLite, memoria, planner ou hora atual. Nao use ferramenta para conversa casual ou resposta conceitual simples.',
       'STATUS DO PC: use get_system_status quando o usuario perguntar sobre CPU, RAM, memoria, armazenamento, disco, temperatura, GPU, desempenho ou uso do computador.',
-      'WEB E NOTICIAS: para pesquisa na internet, use search_google. Para abrir, ler, resumir ou aprofundar site, resultado ou noticia, use scrape_web_site. Em noticias, explique o que aconteceu, quem esta envolvido, por que importa e o que ainda e incerto.',
+      'WEB E NOTICIAS: quando o usuario pedir explicitamente para pesquisar, buscar, procurar, consultar ou verificar algo na internet, web, online, Google, sites ou noticias, use search_google antes de responder. Nao responda de memoria quando a pergunta depender de informacao atual ou externa. Para abrir, ler, resumir, analisar, extrair informacoes ou aprofundar qualquer site, resultado ou noticia, use scrape_web_site. Se o usuario pedir pesquisa com resumo, explicacao, dados, preco, cotacao, comparacao, noticias ou "me passe informacoes", pesquise e depois leia os resultados relevantes com scrape_web_site para entregar uma sintese com fontes. Em noticias, explique o que aconteceu, quem esta envolvido, por que importa e o que ainda e incerto.',
       'PDFS: use read_pdf para ler, procurar, resumir, traduzir ou responder perguntas sobre PDFs. Responda ao pedido, nao despeje texto bruto.',
       'GMAIL: use read_gmail para ler, verificar, resumir, procurar ou entender emails. Ao resumir emails, destaque remetente/empresa provavel, assunto, data, tipo do email, urgencia, sobre o que e e acao sugerida. Proteja dados privados e mostre so o necessario.',
       'ARQUIVOS LOCAIS: use manage_files para criar, ler, listar, editar, mover ou apagar arquivos e pastas. Use find_local_files para encontrar coisas no computador. Se houver memoria apontando uma pasta provavel, use essa pista primeiro.',
@@ -144,6 +144,12 @@ export class Agent {
     const directUrlAccess = this.resolveDirectUrlAccess(userInput);
     if (directUrlAccess) {
       await this.openSpecificUrl(directUrlAccess, userInput, onToken);
+      return;
+    }
+
+    const webResearch = this.resolveWebResearchRequest(userInput);
+    if (webResearch) {
+      await this.openWebResearch(webResearch, userInput, onToken);
       return;
     }
 
@@ -1022,6 +1028,45 @@ export class Agent {
     return domain;
   }
 
+  resolveWebResearchRequest(userInput) {
+    const normalized = this.normalizeText(userInput);
+    const hasSearchIntent = /\b(pesquise|pesquisar|busque|buscar|procure|procurar|encontre|encontrar|ache|achar|investigue|investigar|consulte|consultar|verifique|verificar)\b/.test(
+      normalized
+    );
+    const hasWebScope = /\b(internet|web|online|google|noticia|noticias|site|sites|pagina|paginas)\b/.test(
+      normalized
+    );
+    const hasNewsIntent = /\b(noticia|noticias|ultimas noticias|manchetes)\b/.test(
+      normalized
+    );
+
+    if (!((hasSearchIntent && hasWebScope) || hasNewsIntent)) return null;
+    if (/\b(memoria|memorias|lembranca|lembrancas|gmail|caixa de entrada|inbox|pdf|arquivo|arquivos|pasta|pastas)\b/.test(normalized)) {
+      return null;
+    }
+
+    const query = extractWebSearchQuery(userInput);
+    if (!query) return null;
+
+    const wantsOnlyLinks = /\b(links?|resultados?|sites?)\b/.test(normalized) &&
+      !/\b(resuma|resumir|explique|explicar|analise|analisar|extraia|extrair|informacao|informacoes|dados|detalhes|preco|valor|cotacao|compare|comparar|noticia|noticias|contexto|fontes?)\b/.test(normalized);
+
+    const shouldScrape =
+      !wantsOnlyLinks &&
+      (hasNewsIntent ||
+        /\b(resuma|resumir|explique|explicar|analise|analisar|extraia|extrair|informacao|informacoes|dados|detalhes|preco|valor|cotacao|quanto|compare|comparar|contexto|fontes?|me diga|me passe|traga|verifique)\b/.test(
+          normalized
+        ));
+
+    return {
+      query,
+      searchType: hasNewsIntent ? 'news' : 'web',
+      shouldScrape,
+      maxResults: shouldScrape ? 5 : 7,
+      maxPagesToRead: hasNewsIntent ? 4 : 3
+    };
+  }
+
   resolvePdfAccess(userInput) {
     const normalized = this.normalizeText(userInput);
     if (!/\b(pdf|arquivo|documento)\b/.test(normalized)) return null;
@@ -1114,6 +1159,95 @@ export class Agent {
       await this.respondFromIsolatedToolContent(prompt, onToken);
     } catch (err) {
       const message = `Nao consegui acessar o site ${access.index + 1}: ${err.message}`;
+      if (onToken) onToken(message);
+      this.messages.push({
+        role: 'assistant',
+        content: message,
+      });
+    }
+  }
+
+  async openWebResearch(access, userInput, onToken) {
+    console.log(`\n\n[🔧 Executando Ação: search_google...]`);
+
+    try {
+      const searchResult = await this.executeObservedTool('search_google', {
+        query: access.query,
+        searchType: access.searchType,
+        maxResults: access.maxResults
+      });
+      this.rememberToolResult('search_google', searchResult);
+
+      if (!Array.isArray(searchResult.results) || searchResult.results.length === 0) {
+        const message = searchResult.finalAnswer || `Nao encontrei resultados para: ${access.query}`;
+        if (onToken) onToken(message);
+        this.messages.push({ role: 'assistant', content: message });
+        return;
+      }
+
+      if (!access.shouldScrape) {
+        const finalAnswer = this.formatToolFinalAnswer('search_google', { query: access.query }, searchResult);
+        if (onToken) onToken(finalAnswer);
+        this.messages.push({ role: 'assistant', content: finalAnswer });
+        return;
+      }
+
+      const scrapedPages = [];
+      const scrapeErrors = [];
+
+      for (const [index, result] of searchResult.results.slice(0, access.maxPagesToRead).entries()) {
+        if (!result?.url) continue;
+        console.log(`\n\n[🔧 Executando Ação: scrape_web_site (${index + 1})...]`);
+
+        try {
+          const scrapeResult = await this.executeObservedTool('scrape_web_site', {
+            url: result.url,
+            question: userInput,
+            maxPages: 1
+          });
+          this.rememberToolResult('scrape_web_site', scrapeResult);
+          scrapedPages.push({
+            index: index + 1,
+            title: result.title || result.source || result.url,
+            url: result.url,
+            content: scrapeResult.modelInput || scrapeResult.finalAnswer || JSON.stringify(scrapeResult)
+          });
+        } catch (error) {
+          scrapeErrors.push({
+            index: index + 1,
+            title: result.title || result.source || result.url,
+            url: result.url,
+            message: error.message || String(error)
+          });
+        }
+      }
+
+      if (scrapedPages.length === 0) {
+        const lines = [
+          'Consegui pesquisar, mas nao consegui abrir os resultados para extrair conteudo.',
+          searchResult.finalAnswer,
+          scrapeErrors.length
+            ? `Falhas ao acessar: ${scrapeErrors.map(error => `${error.index}. ${error.message}`).join('; ')}`
+            : null
+        ].filter(Boolean);
+        const message = lines.join('\n\n');
+        if (onToken) onToken(message);
+        this.messages.push({ role: 'assistant', content: message });
+        return;
+      }
+
+      const synthesisInput = buildWebResearchModelInput({
+        userInput,
+        query: access.query,
+        searchType: access.searchType,
+        searchResult,
+        scrapedPages,
+        scrapeErrors
+      });
+
+      await this.respondFromIsolatedToolContent(synthesisInput, onToken);
+    } catch (err) {
+      const message = `Nao consegui pesquisar na internet: ${err.message}`;
       if (onToken) onToken(message);
       this.messages.push({
         role: 'assistant',
@@ -1474,4 +1608,96 @@ function parseToolArgs(args) {
   }
 
   return args && typeof args === 'object' ? args : {};
+}
+
+function extractWebSearchQuery(userInput) {
+  const original = String(userInput || '').trim();
+  if (!original) return null;
+
+  let query = original
+    .replace(/\b(?:por favor|pfv|pra mim|para mim)\b/gi, ' ')
+    .replace(
+      /\b(?:pesquise|pesquisar|busque|buscar|procure|procurar|encontre|encontrar|ache|achar|investigue|investigar|consulte|consultar|verifique|verificar)\b/gi,
+      ' '
+    )
+    .replace(/\b(?:na|no|nas|nos|pela|pelo|pelas|pelos|pela|pela)?\s*(?:internet|web|online|google)\b/gi, ' ')
+    .replace(/\b(?:em|nos?|nas?)\s+(?:sites?|paginas?)\b/gi, ' ')
+    .replace(/\b(?:e\s+)?(?:me\s+)?(?:passe|traga|diga|mostre)\b/gi, ' ')
+    .replace(/\b(?:resuma|resumir|explique|explicar|analise|analisar|extraia|extrair)\b/gi, ' ')
+    .replace(/\b(?:informacoes|informacao|dados|detalhes|resumo|um resumo|links?|resultados?)\b/gi, ' ')
+    .replace(/["“”'`]/g, ' ')
+    .replace(/[,:;]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  query = query
+    .replace(/^(?:sobre|por|de|do|da|dos|das|para|pra)\s+/i, '')
+    .replace(/\s+(?:sobre|por|de|do|da|dos|das|para|pra)$/i, '')
+    .trim();
+
+  if (query.length >= 2 && /[a-z0-9]/i.test(query)) return query;
+
+  const fallback = original
+    .replace(/\b(?:pesquise|pesquisar|busque|buscar|procure|procurar|consulte|consultar|verifique|verificar)\b/gi, ' ')
+    .replace(/\b(?:na|no|nas|nos|internet|web|online|google)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return fallback.length >= 2 ? fallback : null;
+}
+
+function buildWebResearchModelInput({ userInput, query, searchType, searchResult, scrapedPages, scrapeErrors }) {
+  const searchLines = (searchResult.results || [])
+    .slice(0, 10)
+    .map((result, index) => {
+      return [
+        `${index + 1}. ${result.title || result.source || 'Resultado'}`,
+        `URL: ${result.url}`,
+        result.snippet ? `Trecho: ${result.snippet}` : null,
+        result.publishedAt ? `Data: ${result.publishedAt}` : null
+      ].filter(Boolean).join('\n');
+    })
+    .join('\n\n');
+
+  const pageBlocks = scrapedPages
+    .map(page => {
+      return [
+        `Fonte ${page.index}: ${page.title}`,
+        `URL: ${page.url}`,
+        clipText(page.content, 9000)
+      ].join('\n');
+    })
+    .join('\n\n---\n\n');
+
+  const errorLines = scrapeErrors.length
+    ? scrapeErrors
+      .map(error => `${error.index}. ${error.title} (${error.url}): ${error.message}`)
+      .join('\n')
+    : 'Nenhuma falha relevante.';
+
+  return [
+    'Pedido original do usuario:',
+    userInput,
+    '',
+    `Pesquisa executada: ${query}`,
+    `Tipo de pesquisa: ${searchType}`,
+    '',
+    'Resultados encontrados:',
+    searchLines || 'Sem resultados listados.',
+    '',
+    'Conteudo extraido dos sites lidos:',
+    pageBlocks,
+    '',
+    'Falhas ao acessar fontes:',
+    errorLines,
+    '',
+    'Instrucao de resposta:',
+    'Responda ao pedido original usando somente os resultados e conteudos acima. Cite os nomes das fontes ou URLs quando afirmar dados extraidos. Se as fontes divergirem ou faltarem dados, diga isso claramente.'
+  ].join('\n');
+}
+
+function clipText(value, maxChars) {
+  const text = String(value || '').trim();
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n[trecho truncado para caber na analise]`;
 }
