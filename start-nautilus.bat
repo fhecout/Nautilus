@@ -15,20 +15,32 @@ if not exist "node_modules\" (
 )
 
 set "VITE_DEV_SERVER_URL=http://127.0.0.1:5173"
+set "NAUTILUS_PORT=3333"
 
-echo [Nautilus] Iniciando interface (Vite)...
-start "Nautilus - UI" cmd /k "cd /d ""%~dp0"" && npm run ui"
+netstat -ano | findstr /R /C:":5173 .*LISTENING" >nul
+if errorlevel 1 (
+    echo [Nautilus] Iniciando interface Vite...
+    start "Nautilus - UI" /min cmd /c "npm run ui"
+) else (
+    echo [Nautilus] Interface Vite ja esta online em %VITE_DEV_SERVER_URL%.
+)
 
-echo [Nautilus] Aguardando Vite (%VITE_DEV_SERVER_URL%)...
+netstat -ano | findstr /R /C:":3333 .*LISTENING" >nul
+if errorlevel 1 (
+    echo [Nautilus] Iniciando API...
+    start "Nautilus - API" /min cmd /c "npm run server"
+) else (
+    echo [Nautilus] API ja esta online em http://127.0.0.1:%NAUTILUS_PORT%.
+)
+
+echo [Nautilus] Aguardando servicos...
 timeout /t 5 /nobreak >nul
 
-echo [Nautilus] Abrindo Electron (API em http://127.0.0.1:3333)...
+echo [Nautilus] Abrindo aplicacao Electron...
 echo [Nautilus] Ollama deve estar rodando com o modelo do .env
-start "Nautilus" cmd /k "cd /d ""%~dp0"" && set VITE_DEV_SERVER_URL=%VITE_DEV_SERVER_URL% && set NAUTILUS_SEMANTIC_MEMORY=%NAUTILUS_SEMANTIC_MEMORY% && npx electron ."
+set VITE_DEV_SERVER_URL=%VITE_DEV_SERVER_URL%
+npx electron .
 
 echo.
-echo [Nautilus] Iniciado. Para encerrar, feche a janela do Electron e a janela "Nautilus - UI".
-echo [Nautilus] Alternativa no navegador: %VITE_DEV_SERVER_URL%
-pause
-
+echo [Nautilus] Electron encerrado. Use stop-nautilus.bat para fechar API e Vite em segundo plano.
 endlocal

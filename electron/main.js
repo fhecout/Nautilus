@@ -71,7 +71,7 @@ ipcMain.handle('nautilus:window', (event, action) => {
 
 async function isApiOnline(port) {
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/system`, {
+    const response = await fetch(`http://127.0.0.1:${port}/api/status`, {
       signal: AbortSignal.timeout(1200)
     });
     return response.ok;

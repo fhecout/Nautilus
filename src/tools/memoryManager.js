@@ -45,7 +45,7 @@ export async function execute(args) {
 
   if (operation === 'save') {
     const memory = await saveMemory(input.text, { tags: input.tags });
-    return direct(`Memoria salva:\n- ${memory.id}: ${memory.text}`);
+    return direct(`Memoria registrada, senhor: ${memory.text}`);
   }
 
   if (operation === 'search') {
@@ -84,4 +84,3 @@ function normalizeArgs(args) {
 
   return args && typeof args === 'object' ? args : {};
 }
-

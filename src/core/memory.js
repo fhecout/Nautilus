@@ -42,6 +42,12 @@ function getDb() {
     dbInstance.exec("ALTER TABLE memories ADD COLUMN embedding TEXT");
   }
 
+  // Verifica se a coluna pinned existe, adiciona se faltar
+  const hasPinned = pragma.some(col => col.name === 'pinned');
+  if (!hasPinned) {
+    dbInstance.exec("ALTER TABLE memories ADD COLUMN pinned INTEGER DEFAULT 0");
+  }
+
   return dbInstance;
 }
 
@@ -78,6 +84,7 @@ export async function saveMemory(text, options = {}) {
   const normalizedText = normalizeText(text);
   const tags = normalizeTags(options.tags || extractTags(text));
   const created_at = options.created_at || new Date().toISOString();
+  const pinned = options.pinned !== undefined ? (options.pinned ? 1 : 0) : 0;
 
   if (!normalizedText) {
     throw new Error('Texto da memoria nao informado.');
@@ -87,17 +94,65 @@ export async function saveMemory(text, options = {}) {
   const embeddingJson = embeddingVector ? JSON.stringify(embeddingVector) : null;
 
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO memories (id, text, tags, embedding, created_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO memories (id, text, tags, embedding, pinned, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(id, normalizedText, JSON.stringify(tags), embeddingJson, created_at);
+  stmt.run(id, normalizedText, JSON.stringify(tags), embeddingJson, pinned, created_at);
 
   return {
     id,
     text: normalizedText,
     tags,
     embedding: embeddingVector,
+    pinned,
     created_at
+  };
+}
+
+export async function updateMemory(id, updates = {}) {
+  const db = getDb();
+  const memory = db.prepare('SELECT * FROM memories WHERE id = ?').get(id);
+  if (!memory) throw new Error('Memoria nao encontrada.');
+
+  const fields = [];
+  const values = [];
+
+  if (updates.text !== undefined) {
+    const normalizedText = normalizeText(updates.text);
+    fields.push('text = ?');
+    values.push(normalizedText);
+    
+    const embeddingVector = await getEmbedding(normalizedText);
+    const embeddingJson = embeddingVector ? JSON.stringify(embeddingVector) : null;
+    fields.push('embedding = ?');
+    values.push(embeddingJson);
+  }
+  if (updates.tags !== undefined) {
+    fields.push('tags = ?');
+    values.push(JSON.stringify(normalizeTags(updates.tags)));
+  }
+  if (updates.pinned !== undefined) {
+    fields.push('pinned = ?');
+    values.push(updates.pinned ? 1 : 0);
+  }
+
+  if (fields.length === 0) return memory;
+
+  values.push(id);
+
+  db.prepare(`
+    UPDATE memories
+    SET ${fields.join(', ')}
+    WHERE id = ?
+  `).run(...values);
+
+  const updated = db.prepare('SELECT * FROM memories WHERE id = ?').get(id);
+  return {
+    id: updated.id,
+    text: updated.text,
+    tags: JSON.parse(updated.tags || '[]'),
+    pinned: updated.pinned ?? 0,
+    created_at: updated.created_at
   };
 }
 
@@ -110,9 +165,9 @@ export async function searchMemories(keyword, options = {}) {
   const like = `%${query.toLowerCase()}%`;
 
   const stmt = db.prepare(`
-    SELECT id, text, tags, created_at FROM memories
+    SELECT id, text, tags, pinned, created_at FROM memories
     WHERE lower(text) LIKE ? OR lower(tags) LIKE ?
-    ORDER BY created_at DESC
+    ORDER BY pinned DESC, created_at DESC
     LIMIT ?
   `);
 
@@ -121,17 +176,18 @@ export async function searchMemories(keyword, options = {}) {
     id: row.id,
     text: row.text,
     tags: JSON.parse(row.tags || '[]'),
+    pinned: row.pinned ?? 0,
     created_at: row.created_at
   }));
 }
 
 export async function listMemories(options = {}) {
-  const limit = clampInteger(options.limit ?? 30, 1, 100);
+  const limit = clampInteger(options.limit ?? 30, 1, 1000);
   const db = getDb();
 
   const stmt = db.prepare(`
-    SELECT id, text, tags, created_at FROM memories
-    ORDER BY created_at DESC
+    SELECT id, text, tags, pinned, created_at FROM memories
+    ORDER BY pinned DESC, created_at DESC
     LIMIT ?
   `);
 
@@ -140,6 +196,7 @@ export async function listMemories(options = {}) {
     id: row.id,
     text: row.text,
     tags: JSON.parse(row.tags || '[]'),
+    pinned: row.pinned ?? 0,
     created_at: row.created_at
   }));
 }

@@ -10,6 +10,7 @@ import * as fileConverter from './fileConverter.js';
 import * as archiveManager from './archiveManager.js';
 import * as sqliteManager from './sqliteManager.js';
 import * as memoryManager from './memoryManager.js';
+import * as plannerManager from './plannerManager.js';
 
 // Adicione novas tools neste array conforme o projeto cresce
 export const availableTools = [
@@ -25,6 +26,7 @@ export const availableTools = [
   archiveManager,
   sqliteManager,
   memoryManager,
+  plannerManager,
 ];
 
 // Extrai apenas as definições (schemas) para enviar ao modelo
